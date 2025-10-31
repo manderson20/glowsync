@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block content %}
+<h2 style="margin:0 0 12px 0;">Seasons</h2>
+<div class="card" style="overflow:auto;">
+  <table style="width:100%; border-collapse:collapse;">
+    <thead><tr style="text-align:left; border-bottom:1px solid #1f2937;">
+      <th style="padding:8px;">Name</th>
+      <th style="padding:8px;">Start</th>
+      <th style="padding:8px;">End</th>
+      <th style="padding:8px;">Show Hours</th>
+      <th style="padding:8px;">Bucket</th>
+      <th style="padding:8px;"></th>
+    </tr></thead>
+    <tbody>
+      {% for s in seasons %}
+      <tr style="border-bottom:1px solid #1f2937;">
+        <td style="padding:8px;">{{ s.name }}</td>
+        <td style="padding:8px;">{{ s.start_date }}</td>
+        <td style="padding:8px;">{{ s.end_date }}</td>
+        <td style="padding:8px;">{{ s.show_start }} - {{ s.show_end }}</td>
+        <td style="padding:8px;">{{ s.bucket_minutes }} min</td>
+        <td style="padding:8px;"><a href="/seasons/delete/{{ s.id }}">Delete</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<h3 style="margin:16px 0 8px 0;">Add Season</h3>
+<form method="post" action="/seasons/add" class="card">
+  <div class="row">
+    <div>
+      <label>Name</label>
+      <input name="name" placeholder="Christmas 2025" required>
+    </div>
+    <div>
+      <label>Bucket Minutes</label>
+      <input name="bucket" value="1">
+    </div>
+  </div>
+  <div class="row">
+    <div>
+      <label>Start (YYYY-MM-DD)</label>
+      <input name="start" placeholder="2025-11-25" required>
+    </div>
+    <div>
+      <label>End (YYYY-MM-DD)</label>
+      <input name="end" placeholder="2026-01-05" required>
+    </div>
+  </div>
+  <div class="row">
+    <div>
+      <label>Show Start (HH:MM)</label>
+      <input name="show_start" value="17:00">
+    </div>
+    <div>
+      <label>Show End (HH:MM)</label>
+      <input name="show_end" value="23:00">
+    </div>
+  </div>
+  <div style="margin-top:12px;">
+    <button type="submit">Save Season</button>
+  </div>
+</form>
+{% endblock %}

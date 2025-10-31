@@ -1,0 +1,15 @@
+[Unit]
+Description=LightShow API (FastAPI)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/lightshow-visitor-tracker-pi
+Environment="PYTHONUNBUFFERED=1"
+ExecStart=%h/lightshow-visitor-tracker-pi/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
+Restart=on-failure
+User=%i
+
+[Install]
+WantedBy=multi-user.target

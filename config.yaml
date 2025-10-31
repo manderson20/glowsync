@@ -1,0 +1,30 @@
+# Vision and region configuration
+roi_polygon:
+  # List of [x, y] points (normalized 0..1) forming a polygon over the roadway
+  - [0.05, 0.60]
+  - [0.95, 0.60]
+  - [0.95, 0.95]
+  - [0.05, 0.95]
+
+tripline:
+  # Two points (normalized) the centroids must cross to be counted once
+  - [0.10, 0.80]
+  - [0.90, 0.80]
+
+# Counter knobs
+min_contour_area: 1200
+fps_target: 6
+
+cameras:
+  - name: "Driveway"
+    rtsp_url: "${RTSP_URL}"
+    fps_target: 6
+    min_contour_area: 1200
+    roi_polygon:
+      - [0.05, 0.60]
+      - [0.95, 0.60]
+      - [0.95, 0.95]
+      - [0.05, 0.95]
+    tripline:
+      - [0.10, 0.80]
+      - [0.90, 0.80]

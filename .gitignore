@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# OS
+.DS_Store
+
+# App data
+.env
+data/
+*.db
+*.sqlite3
+*.zip
+
+# Logs
+*.log

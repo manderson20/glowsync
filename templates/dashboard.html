@@ -1,0 +1,184 @@
+{% extends "base.html" %}
+{% block content %}
+<h2 style="margin:0 0 12px 0;">Dashboard</h2>
+
+{% if alerts and alerts|length>0 %}
+<div class="card" style="border:1px solid #7f1d1d; background:#431313;">
+  <strong>Alerts</strong>
+  <ul>
+    {% for a in alerts %}<li>{{ a.timestamp }} — {{ a.message }}</li>{% endfor %}
+  </ul>
+</div>
+{% endif %}
+
+<form method="get" action="/dashboard" class="card" style="display:grid; grid-template-columns: repeat(auto-fit, minmax(180px,1fr)); gap:12px; align-items:end; margin-bottom:16px;">
+  <div>
+    <label>From (YYYY-MM-DD)</label>
+    <input type="text" name="from" value="{{ params.get('from','') }}">
+  </div>
+  <div>
+    <label>To (YYYY-MM-DD)</label>
+    <input type="text" name="to" value="{{ params.get('to','') }}">
+  </div>
+  <div>
+    <label>Camera</label>
+    <select name="camera">
+      <option value="">All</option>
+      {% for c in cameras %}
+        <option value="{{ c }}">{{ c }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div>
+    <label>Season</label>
+    <select name="season">
+      <option value="">All</option>
+      {% for s in seasons %}
+        <option value="{{ s.name }}" {% if params.get('season','')==s.name %}selected{% endif %}>{{ s.name }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div>
+    <label>Group By</label>
+    <select name="group">
+      <option value="day" {% if params.get('group','day')=='day' %}selected{% endif %}>Day</option>
+      <option value="hour" {% if params.get('group')=='hour' %}selected{% endif %}>Hour</option>
+    </select>
+  </div>
+  <div>
+    <button type="submit">Update</button>
+  </div>
+</form>
+
+
+<div class="cards" style="margin-bottom:16px;">
+  <div class="card">
+    <h3 style="margin:0 0 8px 0;">Controllers</h3>
+    <div>
+      <span style="display:inline-block;padding:4px 10px;border-radius:999px;background:#0b3b1e;color:#d1fae5;border:1px solid #065f46;">
+        Online {{ controllers.online }} / {{ controllers.total }}
+      </span>
+      <span class="muted" style="margin-left:8px;">Falcon & FPP</span>
+    </div>
+  </div>
+  <div class="card">
+    <h3 style="margin:0 0 8px 0;">FPP Now Playing</h3>
+    {% if fpp %}
+      <div class="muted">Host: {{ fpp.hostname or '—' }} · Version: {{ fpp.version or '—' }}</div>
+      <div style="margin-top:8px;"><strong>{{ fpp.playlist or 'No Playlist' }}</strong></div>
+      <div>{{ fpp.media or '—' }}</div>
+      <div class="muted" style="margin-top:6px;">State: {{ fpp.state or 'unknown' }}</div>
+    {% else %}
+      <div class="muted">No FPP controller detected yet.</div>
+    {% endif %}
+  </div>
+</div>
+
+<div class="cards">
+  <div class="card">
+    <h3 style="margin-top:0;">Combined Vehicles (Tripline)</h3>
+    <canvas id="vehChart"></canvas>
+  </div>
+  <div class="card">
+    <h3 style="margin-top:0;">Device Presence (Baldrick)</h3>
+    <canvas id="devChart"></canvas>
+  </div>
+</div>
+
+
+<div class="cards" style="margin-top:16px;">
+  <div class="card">
+    <h3 style="margin:0 0 8px 0;">Top Media (by Vehicles)</h3>
+    <ol>
+      {% for row in top_media %}
+        <li>{{ row.label }} — {{ row.count }}</li>
+      {% endfor %}
+    </ol>
+  </div>
+</div>
+
+<div class="cards" style="margin-top:16px;">
+<div class="card" style="grid-column: 1 / -1;">
+  <div style="display:flex;justify-content:space-between;align-items:center;">
+    <h3 style="margin:0;">Vehicles by What Was Playing</h3>
+    <form method="get" action="/dashboard">
+      <input type="hidden" name="from" value="{{ params.get('from','') }}">
+      <input type="hidden" name="to" value="{{ params.get('to','') }}">
+      <input type="hidden" name="season" value="{{ params.get('season','') }}">
+      <input type="hidden" name="group" value="{{ params.get('group','day') }}">
+      <label class="muted">Group:</label>
+      <select name="corr">
+        <option value="media" {% if params.get('corr','media')=='media' %}selected{% endif %}>Media</option>
+        <option value="playlist" {% if params.get('corr')=='playlist' %}selected{% endif %}>Playlist</option>
+      </select>
+      <button type="submit">Update</button>
+    </form>
+  </div>
+  <canvas id="corrChart" style="margin-top:10px;"></canvas>
+</div>
+
+  <div class="card">
+    <h3 style="margin-top:0;">Peak Times</h3>
+    <p class="muted">Shows busiest {{ 'day' if params.get('group','day')=='day' else 'hour' }} in the selected range.</p>
+    <ul>
+      <li><strong>Vehicles:</strong> {{ peaks.vehicle.label }} — {{ peaks.vehicle.count }}</li>
+      <li><strong>Devices:</strong> {{ peaks.device_seen.label }} — {{ peaks.device_seen.count }}</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3 style="margin-top:0;">Totals</h3>
+    <ul>
+      <li>Vehicles total: {{ totals.vehicle }}</li>
+      <li>Devices total: {{ totals.device_seen }}</li>
+    </ul>
+  </div>
+</div>
+
+<script>
+const veh = {{ charts.vehicle | tojson }};
+const dev = {{ charts.device_seen | tojson }};
+
+function mkChart(id, data, label){
+  const ctx = document.getElementById(id).getContext('2d');
+  new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: data.labels,
+      datasets: [{
+        label: label,
+        data: data.values,
+        tension: 0.25,
+        pointRadius: 0,
+        borderWidth: 2
+      }]
+    },
+    options: {
+      responsive: true,
+      scales: {
+        x: { ticks: { color: '#cbd5e1' } },
+        y: { ticks: { color: '#cbd5e1' } }
+      },
+      plugins: { legend: { labels: { color:'#e5e7eb' } } }
+    }
+  });
+}
+
+mkChart('vehChart', veh, 'Vehicles');
+mkChart('devChart', dev, 'Devices');
+
+fetch(`/correlate?group={{ params.get('corr','media') }}&season={{ params.get('season','') }}&date_from={{ params.get('from','') }}&date_to={{ params.get('to','') }}`)
+  .then(r=>r.json())
+  .then(d=>{
+    const labels = d.series.map(x=>x.label);
+    const values = d.series.map(x=>x.count);
+    const ctx = document.getElementById('corrChart').getContext('2d');
+    new Chart(ctx, {
+      type: 'bar',
+      data: { labels, datasets: [{ label: 'Vehicles', data: values, borderWidth: 1 }] },
+      options: { responsive:true, scales:{ x:{ ticks:{ color:'#cbd5e1' } }, y:{ ticks:{ color:'#cbd5e1' } } },
+                 plugins:{ legend:{ labels:{ color:'#e5e7eb' } } } }
+    });
+  });
+
+</script>
+{% endblock %}

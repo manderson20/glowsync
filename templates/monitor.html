@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block content %}
+<h2 style="margin:0 0 12px 0;">Controller Monitor</h2>
+<div class="card" style="overflow:auto;">
+  <table style="width:100%; border-collapse:collapse;">
+    <thead>
+      <tr style="text-align:left; border-bottom:1px solid #1f2937;">
+        <th style="padding:8px;">Name</th>
+        <th style="padding:8px;">IP</th>
+        <th style="padding:8px;">Kind</th>
+        <th style="padding:8px;">Status</th>
+        <th style="padding:8px;">RTT</th>
+        <th style="padding:8px;">Last Checked</th>
+        <th style="padding:8px;"></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for c in controllers %}
+      <tr style="border-bottom:1px solid #1f2937;">
+        <td style="padding:8px;">{{ c.name }}</td>
+        <td style="padding:8px;">{{ c.ip }}</td>
+        <td style="padding:8px;">{{ c.kind }}</td>
+        <td style="padding:8px;"><span style="padding:2px 8px; border-radius:999px; background: {% if c.last_status=='online' %}#065f46{% else %}#7f1d1d{% endif %}; color:white;">{{ c.last_status }}</span></td>
+        <td style="padding:8px;">{{ c.last_rtt_ms if c.last_rtt_ms else '—' }} ms</td>
+        <td style="padding:8px;">{{ c.last_checked if c.last_checked else '—' }}</td>
+        <td style="padding:8px;"><a href="/controllers/delete/{{ c.id }}">Delete</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<h3 style="margin:16px 0 8px 0;">Add Controller</h3>
+<form method="post" action="/controllers/add" class="card">
+  <div class="row">
+    <div>
+      <label>Name</label>
+      <input name="name" required>
+    </div>
+    <div>
+      <label>IP Address</label>
+      <input name="ip" required>
+    </div>
+  </div>
+  <div class="row">
+    <div>
+      <label>Kind</label>
+      <select name="kind">
+        <option value="falcon">Falcon</option>
+        <option value="fpp">FPP</option>
+      </select>
+    </div>
+    <div>
+      <label>Notes (optional)</label>
+      <input name="notes">
+    </div>
+  </div>
+  <div style="margin-top:12px;">
+    <button type="submit">Add</button>
+    <span class="muted" style="margin-left:8px;">Monitoring runs every minute; refresh to see status.</span>
+  </div>
+</form>
+<script>
+  // Auto-refresh every 20s
+  setTimeout(() => location.reload(), 20000);
+</script>
+{% endblock %}

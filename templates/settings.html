@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block content %}
+<h2 style="margin:0 0 12px 0;">Settings</h2>
+<form method="post" action="/settings" class="card">
+  <div class="row">
+    <div>
+      <label>Baldrick CSV URL</label>
+      <input name="BALDRICK_CSV_URL" value="{{ env.BALDRICK_CSV_URL or '' }}">
+    </div>
+    <div>
+      <label>Baldrick Poll Cron (crontab)</label>
+      <input name="BALDRICK_POLL_CRON" value="{{ env.BALDRICK_POLL_CRON or '*/5 * * * *' }}">
+    </div>
+  </div>
+  <div class="row">
+    <div>
+      <label>RTSP URL (G3 Bullet)</label>
+      <input name="RTSP_URL" value="{{ env.RTSP_URL or '' }}">
+    </div>
+    <div>
+      <label>FPS Target</label>
+      <input name="FPS_TARGET" value="{{ env.FPS_TARGET or '6' }}">
+    </div>
+  </div>
+  <div class="row">
+    <div>
+      <label>Min Contour Area</label>
+      <input name="MIN_CONTOUR_AREA" value="{{ env.MIN_CONTOUR_AREA or '1200' }}">
+    </div>
+    <div>
+      <label>Timezone</label>
+      <input name="TIMEZONE" value="{{ env.TIMEZONE or 'America/Chicago' }}">
+    </div>
+  </div>
+  <label>ROI Polygon (JSON, list of [x,y])</label>
+  <textarea name="roi_polygon" rows="3">{{ vision.roi_polygon | tojson }}</textarea>
+  <label>Tripline (JSON, two [x,y] points)</label>
+  <textarea name="tripline" rows="2">{{ vision.tripline | tojson }}</textarea>
+  <div style="margin-top:12px;">
+    <button type="submit">Save</button>
+  </div>
+  <p class="muted" style="margin-top:8px;">Changes write to <code>.env</code> and <code>config.yaml</code>. Restart services to apply the tripline/ROI.</p>
+</form>
+{% endblock %}

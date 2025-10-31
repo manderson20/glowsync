@@ -1,0 +1,455 @@
+from fastapi import FastAPI, Query, Request, Form, Depends, Response
+from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse, HTMLResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from typing import Optional
+from datetime import datetime
+from app.config import load_config
+from app.db import init_db, get_session, AutoCount, Controller, Season, Alert
+from sqlalchemy import select, func
+import os, json
+
+# Basic auth for settings
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
+import secrets
+
+security = HTTPBasic()
+
+cfg = load_config()
+init_db(cfg['db_path'])
+
+app = FastAPI(title='LightShow Visitor Tracker')
+
+def get_current_season(now_utc):
+    s = get_session()
+    q = s.query(Season).order_by(Season.start_date.desc())
+    for season in q.all():
+        if season.start_date <= now_utc < season.end_date:
+            return season
+    return None
+
+app.mount("/static", StaticFiles(directory="static"), name="static")
+templates = Jinja2Templates(directory="templates")
+
+def await_correlate_like(sess, season, df, dt, camera):
+    from app.db import FPPStatus
+    q = select(AutoCount.timestamp, AutoCount.count_value, AutoCount.camera_name).where(AutoCount.count_type=='vehicle')
+    if season: q = q.where(AutoCount.season==season)
+    if df: q = q.where(AutoCount.timestamp >= df)
+    if dt: q = q.where(AutoCount.timestamp < dt)
+    if camera: q = q.where(AutoCount.camera_name==camera)
+    q = q.order_by(AutoCount.timestamp.asc())
+    rows = sess.execute(q).all()
+    q2 = select(FPPStatus.timestamp, FPPStatus.media).order_by(FPPStatus.timestamp.asc())
+    frows = sess.execute(q2).all()
+    res = {}
+    j=0
+    for ts, cnt, camname in rows:
+        while j+1 < len(frows) and frows[j+1][0] <= ts: j+=1
+        media = frows[j][1] if frows else '(unknown)'
+        if not media: media='(unknown)'
+        res[media] = res.get(media,0) + int(cnt)
+    return sorted(res.items(), key=lambda x:x[1], reverse=True)
+
+
+ADMIN_USER = os.getenv("ADMIN_USERNAME", "admin")
+ADMIN_PASS = os.getenv("ADMIN_PASSWORD", "changeme")
+
+from fastapi import HTTPException  # make sure this import exists
+
+def require_basic(request: Request):
+    # Basic auth header parse
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Basic "):
+        # Tell the browser to prompt for creds
+        raise HTTPException(
+            status_code=401,
+            detail="Unauthorized",
+            headers={"WWW-Authenticate": 'Basic realm="GlowSync"'}
+        )
+
+    import base64, os
+    try:
+        userpass = base64.b64decode(auth.split(" ", 1)[1]).decode("utf-8")
+        username, password = userpass.split(":", 1)
+    except Exception:
+        raise HTTPException(
+            status_code=401,
+            detail="Bad auth header",
+            headers={"WWW-Authenticate": 'Basic realm="GlowSync"'}
+        )
+
+    expected_user = os.getenv("ADMIN_USERNAME", "admin")
+    expected_pass = os.getenv("ADMIN_PASSWORD", "changeme")
+    if username != expected_user or password != expected_pass:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid credentials",
+            headers={"WWW-Authenticate": 'Basic realm="GlowSync"'}
+        )
+
+    # returning True satisfies FastAPI's Depends()
+    return True
+@app.get('/')
+def root():
+    return RedirectResponse('/dashboard')
+
+@app.get('/health')
+def health():
+    return {'ok': True}
+
+def _parse_time(s):
+    if not s: return None
+    try:
+        return datetime.fromisoformat(s)
+    except Exception:
+        try:
+            return datetime.fromisoformat(s + 'T00:00:00')
+        except Exception:
+            return None
+
+@app.get('/counts')
+def counts(type: str, 
+           date_from: Optional[str] = Query(None),
+           date_to: Optional[str] = Query(None)):
+    df = _parse_time(date_from)
+    dt = _parse_time(date_to)
+    s = get_session()
+    q = select(func.strftime('%Y-%m-%d %H:%M', AutoCount.timestamp).label('minute'),
+               func.sum(AutoCount.count_value)).where(AutoCount.count_type==type)
+    if df: q = q.where(AutoCount.timestamp >= df)
+    if dt: q = q.where(AutoCount.timestamp < dt)
+    q = q.group_by('minute').order_by('minute')
+    rows = s.execute(q).all()
+    return {'type': type, 'series': [{'minute': r[0], 'count': int(r[1])} for r in rows]}
+
+@app.get('/dashboard', response_class=HTMLResponse)
+def dashboard(
+    request: Request,
+    group: str = 'day',
+    season: str = '',
+    camera: str = '',
+    date_from: Optional[str] = Query(None, alias='from'),
+    date_to: Optional[str] = Query(None, alias='to'),
+    corr: str = 'media'
+):
+    # Parse dates
+    df = _parse_time(date_from)
+    dt = _parse_time(date_to)
+
+    # DB session FIRST so inner helpers can use it
+    s = get_session()
+
+    # Build series grouped by day/hour, with optional season/camera filters
+    def series_for(ctype: str):
+        fmt = '%Y-%m-%d' if group == 'day' else '%Y-%m-%d %H:00'
+        q = select(
+            func.strftime(fmt, AutoCount.timestamp).label('bucket'),
+            func.sum(AutoCount.count_value)
+        ).where(AutoCount.count_type == ctype)
+
+        if season:
+            q = q.where(AutoCount.season == season)
+        if df:
+            q = q.where(AutoCount.timestamp >= df)
+        if dt:
+            q = q.where(AutoCount.timestamp < dt)
+        if camera and ctype == 'vehicle':
+            q = q.where(AutoCount.camera_name == camera)
+
+        q = q.group_by('bucket').order_by('bucket')
+        rows = s.execute(q).all()
+        labels = [r[0] for r in rows]
+        values = [int(r[1]) for r in rows]
+        total = sum(values) if values else 0
+        peak_label, peak_count = ('—', 0)
+        if values:
+            idx = max(range(len(values)), key=lambda i: values[i])
+            peak_label, peak_count = labels[idx], values[idx]
+        return {'labels': labels, 'values': values, 'total': total, 'peak': {'label': peak_label, 'count': peak_count}}
+
+    veh = series_for('vehicle')
+    dev = series_for('device_seen')
+
+    # Controllers badge & FPP info
+    total = s.query(Controller).count()
+    online = s.query(Controller).filter(Controller.last_status == 'online').count()
+    fpp = s.query(Controller).filter(Controller.kind == 'fpp').order_by(Controller.id.asc()).first()
+    fpp_info = {}
+    if fpp and fpp.last_info_json:
+        try:
+            fpp_info = json.loads(fpp.last_info_json)
+        except Exception:
+            fpp_info = {}
+
+    # Seasons list, cameras list, alerts
+    seasons_list = s.query(Season).order_by(Season.start_date.desc()).all()
+    cameras = [r[0] for r in s.execute(
+        select(AutoCount.camera_name).where(AutoCount.camera_name != None).group_by(AutoCount.camera_name)
+    ).all()]
+    alerts = s.execute(
+        select(Alert.timestamp, Alert.message).where(Alert.active == 1).order_by(Alert.timestamp.desc()).limit(5)
+    ).all()
+
+    # Top media (reuse correlation logic)
+    def correlate_like(sess, season, df, dt, camera):
+        from app.db import FPPStatus
+        q = select(AutoCount.timestamp, AutoCount.count_value, AutoCount.camera_name).where(AutoCount.count_type == 'vehicle')
+        if season: q = q.where(AutoCount.season == season)
+        if df: q = q.where(AutoCount.timestamp >= df)
+        if dt: q = q.where(AutoCount.timestamp < dt)
+        if camera: q = q.where(AutoCount.camera_name == camera)
+        q = q.order_by(AutoCount.timestamp.asc())
+        rows = sess.execute(q).all()
+        q2 = select(FPPStatus.timestamp, FPPStatus.media).order_by(FPPStatus.timestamp.asc())
+        frows = sess.execute(q2).all()
+        res = {}
+        j = 0
+        for ts, cnt, camname in rows:
+            while j + 1 < len(frows) and frows[j + 1][0] <= ts:
+                j += 1
+            media = frows[j][1] if frows else '(unknown)'
+            if not media: media = '(unknown)'
+            res[media] = res.get(media, 0) + int(cnt)
+        return sorted(res.items(), key=lambda x: x[1], reverse=True)
+
+    top_media_pairs = correlate_like(s, season, df, dt, camera)[:10]
+    top_media = [{'label': k, 'count': v} for k, v in top_media_pairs]
+
+    return templates.TemplateResponse('dashboard.html', {
+        'request': request,
+        'title': 'Dashboard',
+        'charts': {'vehicle': veh, 'device_seen': dev},
+        'totals': {'vehicle': veh['total'], 'device_seen': dev['total']},
+        'peaks': {'vehicle': veh['peak'], 'device_seen': dev['peak']},
+        'controllers': {'online': online, 'total': total},
+        'fpp': fpp_info,
+        'seasons': seasons_list,
+        'cameras': cameras,
+        'top_media': top_media,
+        'alerts': alerts,
+        'params': {'from': date_from or '', 'to': date_to or '', 'group': group, 'season': season, 'camera': camera, 'corr': corr}
+    })
+
+@app.get('/settings', response_class=HTMLResponse)
+def settings_page(request: Request, auth: bool = Depends(require_basic)):
+    # Show .env and config.yaml values
+    env = {
+        'BALDRICK_CSV_URL': os.getenv('BALDRICK_CSV_URL',''),
+        'BALDRICK_POLL_CRON': os.getenv('BALDRICK_POLL_CRON','*/5 * * * *'),
+        'RTSP_URL': os.getenv('RTSP_URL',''),
+        'FPS_TARGET': os.getenv('FPS_TARGET','6'),
+        'MIN_CONTOUR_AREA': os.getenv('MIN_CONTOUR_AREA','1200'),
+        'TIMEZONE': os.getenv('TIMEZONE','America/Chicago'),
+    }
+    vision = cfg.get('vision', {})
+    return templates.TemplateResponse('settings.html', {'request': request, 'env': env, 'vision': vision})
+
+@app.post('/settings')
+def settings_save(request: Request,
+                  BALDRICK_CSV_URL: str = Form(''),
+                  BALDRICK_POLL_CRON: str = Form('*/5 * * * *'),
+                  RTSP_URL: str = Form(''),
+                  FPS_TARGET: str = Form('6'),
+                  MIN_CONTOUR_AREA: str = Form('1200'),
+                  TIMEZONE: str = Form('America/Chicago'),
+                  roi_polygon: str = Form('[]'),
+                  tripline: str = Form('[]'),
+                  auth: bool = Depends(require_basic)):
+    # Write .env
+    lines = []
+    def set_line(k,v): lines.append(f"{k}={v}")
+    set_line('BALDRICK_CSV_URL', BALDRICK_CSV_URL)
+    set_line('BALDRICK_POLL_CRON', BALDRICK_POLL_CRON)
+    set_line('RTSP_URL', RTSP_URL)
+    set_line('FPS_TARGET', FPS_TARGET)
+    set_line('MIN_CONTOUR_AREA', MIN_CONTOUR_AREA)
+    set_line('TIMEZONE', TIMEZONE)
+    with open('.env','w') as f:
+        f.write("\n".join(lines)+"\n")
+    # Write config.yaml
+    try:
+        import yaml
+        rp = json.loads(roi_polygon) if roi_polygon else []
+        tl = json.loads(tripline) if tripline else []
+        data = {'roi_polygon': rp, 'tripline': tl,
+                'min_contour_area': int(MIN_CONTOUR_AREA), 'fps_target': int(FPS_TARGET)}
+        with open('config.yaml','w') as f:
+            yaml.safe_dump(data, f)
+    except Exception as e:
+        return JSONResponse({'error': str(e)}, status_code=400)
+    return RedirectResponse('/settings', status_code=303)
+
+@app.post('/ingest/autocount')
+async def ingest_autocount(payload: dict):
+    required = ['timestamp','source','count_type','count_value']
+    if not all(k in payload for k in required):
+        return JSONResponse({'error':'missing fields'}, status_code=400)
+    from dateutil.parser import isoparse
+    ts = isoparse(payload['timestamp'])
+    s = get_session()
+    rec = AutoCount(timestamp=ts, source=payload['source'],
+                    camera_name=payload.get('camera_name'),
+                    count_type=payload['count_type'],
+                    count_value=int(payload['count_value']),
+                    meta_json=payload.get('meta_json'))
+    s.add(rec); s.commit()
+    return {'ok': True, 'id': rec.id}
+
+@app.get('/monitor', response_class=HTMLResponse)
+def monitor_page(request: Request, auth: bool = Depends(require_basic)):
+    s = get_session()
+    controllers = s.query(Controller).order_by(Controller.name).all()
+    return templates.TemplateResponse('monitor.html', {'request': request, 'controllers': controllers})
+
+@app.post('/controllers/add')
+def controllers_add(request: Request,
+                    name: str = Form(...),
+                    ip: str = Form(...),
+                    kind: str = Form(...),
+                    notes: str = Form(''),
+                    auth: bool = Depends(require_basic)):
+    s = get_session()
+    c = Controller(name=name.strip(), ip=ip.strip(), kind=kind.strip(), notes=notes.strip())
+    s.add(c); s.commit()
+    return RedirectResponse('/monitor', status_code=303)
+
+@app.get('/controllers/delete/{cid}')
+def controllers_delete(cid: int, auth: bool = Depends(require_basic)):
+    s = get_session()
+    c = s.get(Controller, cid)
+    if c:
+        s.delete(c); s.commit()
+    return RedirectResponse('/monitor', status_code=303)
+
+from io import BytesIO
+import xlsxwriter
+from sqlalchemy import delete
+
+@app.get('/seasons', response_class=HTMLResponse)
+def seasons_page(request: Request, auth: bool = Depends(require_basic)):
+    s = get_session()
+    seasons = s.query(Season).order_by(Season.start_date.desc()).all()
+    return templates.TemplateResponse('seasons.html', {'request': request, 'seasons': seasons})
+
+@app.post('/seasons/add')
+def seasons_add(name: str = Form(...),
+                start: str = Form(...),
+                end: str = Form(...),
+                show_start: str = Form('17:00'),
+                show_end: str = Form('23:00'),
+                bucket: str = Form('1'),
+                auth: bool = Depends(require_basic)):
+    from dateutil.parser import isoparse
+    tz = os.getenv('TIMEZONE','America/Chicago')
+    # Store as UTC at midnight boundaries
+    sd = isoparse(start + 'T00:00:00-06:00')  # rough CST; fine for coarse season bounds
+    ed = isoparse(end + 'T00:00:00-06:00')
+    s = get_session()
+    season = Season(name=name.strip(), start_date=sd, end_date=ed,
+                    show_start=show_start.strip(), show_end=show_end.strip(),
+                    bucket_minutes=int(bucket))
+    s.add(season); s.commit()
+    return RedirectResponse('/seasons', status_code=303)
+
+@app.get('/seasons/delete/{sid}')
+def seasons_delete(sid: int, auth: bool = Depends(require_basic)):
+    s = get_session()
+    z = s.get(Season, sid)
+    if z:
+        s.delete(z); s.commit()
+    return RedirectResponse('/seasons', status_code=303)
+
+@app.get('/storage', response_class=HTMLResponse)
+def storage_page(request: Request, auth: bool = Depends(require_basic)):
+    s = get_session()
+    seasons = s.query(Season).order_by(Season.start_date.desc()).all()
+    dbp = os.getenv('DB_PATH','data/tracker.db')
+    try:
+        size_mb = round(os.path.getsize(dbp)/1048576, 2)
+    except FileNotFoundError:
+        size_mb = 0.0
+    return templates.TemplateResponse('storage.html', {'request': request, 'seasons': seasons, 'db': {'path': dbp, 'size_mb': size_mb}})
+
+@app.post('/purge')
+def purge(before: str = Form(''), season_name: str = Form(''), auth: bool = Depends(require_basic)):
+    s = get_session()
+    from dateutil.parser import isoparse
+    q = s.query(AutoCount)
+    if season_name:
+        q = q.filter(AutoCount.season==season_name)
+    elif before:
+        try:
+            dt = isoparse(before + 'T00:00:00')
+            q = q.filter(AutoCount.timestamp < dt)
+        except Exception:
+            return JSONResponse({'error':'bad date'}, status_code=400)
+    else:
+        return JSONResponse({'error':'no criteria'}, status_code=400)
+    deleted = 0
+    for row in q.all():
+        s.delete(row); deleted += 1
+    s.commit()
+    # VACUUM
+    s.execute('VACUUM')
+    return RedirectResponse('/storage', status_code=303)
+
+@app.get('/export.xlsx')
+def export_xlsx(season: str, group: str = 'day', auth: bool = Depends(require_basic)):
+    s = get_session()
+    buf = BytesIO()
+    wb = xlsxwriter.Workbook(buf, {'in_memory': True})
+    ws = wb.add_worksheet('Summary')
+    fmt_h = wb.add_format({'bold': True})
+    ws.write_row(0,0, ['Season','GroupBy','Generated'], fmt_h)
+    from datetime import datetime as _dt
+    ws.write_row(1,0,[season, group, _dt.utcnow().isoformat()+'Z'])
+    # Vehicles/devices sheets
+    def write_sheet(ctype, name):
+        ws2 = wb.add_worksheet(name)
+        fmt = '%Y-%m-%d' if group=='day' else '%Y-%m-%d %H:00'
+        q = select(func.strftime(fmt, AutoCount.timestamp).label('bucket'),
+                   func.sum(AutoCount.count_value)).where(AutoCount.count_type==ctype, AutoCount.season==season).group_by('bucket').order_by('bucket')
+        rows = s.execute(q).all()
+        ws2.write_row(0,0,['bucket','count'], fmt_h)
+        for i,(b,v) in enumerate(rows, start=1):
+            ws2.write(i,0,b); ws2.write(i,1,int(v))
+    write_sheet('vehicle','Vehicles')
+    write_sheet('device_seen','Devices')
+    wb.close()
+    buf.seek(0)
+    return Response(buf.read(), media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                    headers={'Content-Disposition': f'attachment; filename="{season.replace(" ","_")}_export.xlsx"'})
+
+@app.get('/correlate')
+def correlate(group: str = 'media', season: str = '', date_from: Optional[str] = None, date_to: Optional[str] = None):
+    # For each AutoCount bucket (vehicles), attach last-known FPPStatus at/before that timestamp, then group/sum.
+    df = _parse_time(date_from)
+    dt = _parse_time(date_to)
+    s = get_session()
+    # Build rows via Python (SQLite correlated subqueries are trickier without window functions)
+    q = select(AutoCount.timestamp, AutoCount.count_value).where(AutoCount.count_type=='vehicle')
+    if season:
+        q = q.where(AutoCount.season==season)
+    if df: q = q.where(AutoCount.timestamp >= df)
+    if dt: q = q.where(AutoCount.timestamp < dt)
+    q = q.order_by(AutoCount.timestamp.asc())
+    rows = s.execute(q).all()
+    # Preload FPP statuses
+    from app.db import FPPStatus
+    q2 = select(FPPStatus.timestamp, FPPStatus.playlist, FPPStatus.media).order_by(FPPStatus.timestamp.asc())
+    frows = s.execute(q2).all()
+    # Walk with pointer
+    res = {}
+    j = 0
+    for ts, cnt in rows:
+        while j+1 < len(frows) and frows[j+1][0] <= ts:
+            j += 1
+        label = None
+        if frows:
+            label = frows[j][1] if group=='playlist' else frows[j][2]
+        if not label: label = '(unknown)'
+        res[label] = res.get(label, 0) + int(cnt)
+    # Return as sorted list
+    ranked = sorted(([k,v] for k,v in res.items()), key=lambda x: x[1], reverse=True)
+    return {'group': group, 'season': season, 'series': [{'label': k, 'count': v} for k,v in ranked]}

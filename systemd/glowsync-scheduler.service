@@ -1,0 +1,15 @@
+[Unit]
+Description=GlowSync Scheduler
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/glowsync
+Environment="PYTHONUNBUFFERED=1"
+ExecStart=%h/glowsync/.venv/bin/python -m app.scheduler
+Restart=on-failure
+User=%i
+
+[Install]
+WantedBy=multi-user.target
