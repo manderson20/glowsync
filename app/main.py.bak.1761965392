@@ -235,6 +235,7 @@ def dashboard(
         'params': {'from': date_from or '', 'to': date_to or '', 'group': group, 'season': season, 'camera': camera, 'corr': corr}
     })
 
+
 @app.post('/ingest/autocount')
 async def ingest_autocount(payload: dict):
     required = ['timestamp','source','count_type','count_value']
@@ -428,6 +429,7 @@ def settings_get(request: Request, auth: bool = Depends(require_basic)):
         'request': request, 'saved': False, 'values': vals, 'timezones': tzs
     })
 
+
     updates = {
         'TIMEZONE': timezone,
         'DASHBOARD_AUTOREFRESH': max(int(auto_refresh), 0),
@@ -441,6 +443,33 @@ def settings_get(request: Request, auth: bool = Depends(require_basic)):
 
     logger.info('settings_post submit_action=%s', submit_action)
     set_env_vars(updates)
+
+# Always defer restart so the UI can redirect before services bounce
+import subprocess, os
+cmd = "sh -lc 'sleep 1; sudo /usr/local/sbin/glowsync-restart >/dev/null 2>&1 &'"
+try:
+    subprocess.Popen(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, preexec_fn=os.setsid)
+    return RedirectResponse(url="/settings?restarted=0", status_code=303)
+except Exception:
+    return RedirectResponse(url="/settings?restarted=1", status_code=303)
+
+
+
+    updates = {
+        'TIMEZONE': timezone,
+        'DASHBOARD_AUTOREFRESH': max(int(auto_refresh), 0),
+        'BALDRICK_BASELINE_MODE': baseline_mode,
+        'BALDRICK_BASELINE': max(int(baseline), 0),
+        'BALDRICK_CSV_URL': (baldrick_url or '').strip(),
+        'ADMIN_USERNAME': admin_username,
+    }
+    if (admin_password or '').strip():
+        updates['ADMIN_PASSWORD'] = admin_password.strip()
+
+    set_env_vars(updates)
+
+    # Minimal, always-success redirect (we'll rewire restart after service is healthy)
+    return RedirectResponse(url="/settings?restarted=0", status_code=303)
 
 @app.post('/settings', response_class=HTMLResponse)
 def settings_post(

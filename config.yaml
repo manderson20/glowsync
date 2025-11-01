@@ -1,16 +1,4 @@
 fps_target: 6
 min_contour_area: 1200
-roi_polygon:
-- - 0.05
-  - 0.6
-- - 0.95
-  - 0.6
-- - 0.95
-  - 0.95
-- - 0.05
-  - 0.95
-tripline:
-- - 0.1
-  - 0.8
-- - 0.9
-  - 0.8
+roi_polygon: []
+tripline: []

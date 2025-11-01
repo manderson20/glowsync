@@ -1,17 +1,23 @@
 # Python
 __pycache__/
 *.pyc
-.venv/
-
-# OS
-.DS_Store
-
-# App data
-.env
-data/
-*.db
+*.pyo
+*.pyd
 *.sqlite3
-*.zip
+.venv/
+env/
+venv/
 
-# Logs
+# Node/Front-end (if any)
+node_modules/
+
+# Editor/OS
+.DS_Store
+.vscode/
+
+# Runtime / local-only
+.env
 *.log
+
+# Systemd units generated locally (we won't track /etc files)
+*.service
