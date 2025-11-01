@@ -17,3 +17,4 @@ icmplib==3.0
 
 XlsxWriter==3.2.0
 pytz==2024.1
+python-dateutil==2.9.0.post0

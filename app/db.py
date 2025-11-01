@@ -1,10 +1,13 @@
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, Text, func, Index
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, Text, func, Index, select
 from sqlalchemy.orm import declarative_base, sessionmaker
+from sqlalchemy.pool import NullPool
 from datetime import datetime, timezone
-import argparse, os
+import os
+import argparse
 
 Base = declarative_base()
 
+# ---------- Models ----------
 class Controller(Base):
     __tablename__ = 'controllers'
     id = Column(Integer, primary_key=True)
@@ -16,8 +19,6 @@ class Controller(Base):
     last_rtt_ms = Column(Integer)
     last_checked = Column(DateTime(timezone=True))
     last_info_json = Column(Text)  # optional structured details (e.g., FPP now playing)
-
-SessionLocal = None
 
 class Season(Base):
     __tablename__ = 'seasons'
@@ -33,38 +34,15 @@ class AutoCount(Base):
     __tablename__ = 'auto_counts'
     id = Column(Integer, primary_key=True)
     timestamp = Column(DateTime(timezone=True), nullable=False, index=True)
-    source = Column(String(64), nullable=False)
-    camera_name = Column(String(128))
-    count_type = Column(String(64), nullable=False)
+    source = Column(String(64), nullable=False)          # 'opencv_tripline', 'baldrick', etc.
+    camera_name = Column(String(128))                    # for vehicle counts
+    count_type = Column(String(64), nullable=False)      # 'vehicle', 'device_seen'
     count_value = Column(Integer, nullable=False)
     season = Column(String(128))
     meta_json = Column(Text)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 Index('ix_auto_counts_ct_ts', AutoCount.count_type, AutoCount.timestamp)
-
-def init_db(db_path: str):
-    os.makedirs(os.path.dirname(db_path), exist_ok=True)
-    eng = create_engine(f'sqlite:///{db_path}', echo=False, future=True)
-    Base.metadata.create_all(eng)
-    global SessionLocal
-    SessionLocal = sessionmaker(bind=eng, expire_on_commit=False, future=True)
-    return eng
-
-def get_session():
-    if SessionLocal is None:
-        raise RuntimeError('DB not initialized. Call init_db(db_path) first.')
-    return SessionLocal()
-
-if __name__ == '__main__':
-    ap = argparse.ArgumentParser()
-    ap.add_argument('--init', action='store_true', help='Initialize database')
-    ap.add_argument('--db', default=os.environ.get('DB_PATH','data/tracker.db'))
-    args = ap.parse_args()
-    if args.init:
-        init_db(args.db)
-        print('Initialized DB at', args.db)
-
 
 class FPPStatus(Base):
     __tablename__ = 'fpp_status'
@@ -77,11 +55,54 @@ class FPPStatus(Base):
     media = Column(String(256))
     raw_json = Column(Text)
 
-
 class Alert(Base):
     __tablename__ = 'alerts'
     id = Column(Integer, primary_key=True)
     timestamp = Column(DateTime(timezone=True), nullable=False, index=True)
-    severity = Column(String(16), default='warn')
+    severity = Column(String(16), default='warn')  # 'info','warn','error'
     message = Column(Text, nullable=False)
-    active = Column(Integer, default=1)  # 1 active, 0 resolved
+    active = Column(Integer, default=1)            # 1 active, 0 resolved
+
+# ---------- Engine / Session ----------
+# Default DB file: /home/itadmin/glowsync/data/tracker.db (no need to set anything)
+DEFAULT_DB_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'data', 'tracker.db'))
+DB_PATH = os.getenv('DB_PATH', DEFAULT_DB_PATH)
+
+# Ensure the directory exists
+os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+
+# Use NullPool for SQLite on Pi (prevents QueuePool timeouts)
+engine = create_engine(
+    f"sqlite:///{DB_PATH}",
+    poolclass=NullPool,
+    connect_args={"check_same_thread": False, "timeout": 30},
+    future=True,
+    echo=False
+)
+SessionLocal = sessionmaker(bind=engine, expire_on_commit=False, future=True)
+
+def get_session():
+    return SessionLocal()
+
+def init_db(path: str | None = None):
+    """Create/upgrade tables. If path is provided, creates there; else uses DB_PATH."""
+    target = path or DB_PATH
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    eng = create_engine(
+        f"sqlite:///{target}",
+        poolclass=NullPool,
+        connect_args={"check_same_thread": False, "timeout": 30},
+        future=True,
+        echo=False
+    )
+    Base.metadata.create_all(eng)
+
+# ---------- CLI ----------
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--init", action="store_true", help="Create DB tables")
+    parser.add_argument("--path", default=DB_PATH, help="Optional custom DB path")
+    args = parser.parse_args()
+    if args.init:
+        init_db(args.path)
+        print(f"[db] Initialized at: {args.path}")

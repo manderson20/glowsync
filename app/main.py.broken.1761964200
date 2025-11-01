@@ -1,5 +1,3 @@
-from fastapi.responses import HTMLResponse, RedirectResponse
-from fastapi import Request, Depends, Form
 from fastapi import FastAPI, Query, Request, Form, Depends, Response
 from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -53,6 +51,7 @@ def await_correlate_like(sess, season, df, dt, camera):
         res[media] = res.get(media,0) + int(cnt)
     return sorted(res.items(), key=lambda x:x[1], reverse=True)
 
+
 ADMIN_USER = os.getenv("ADMIN_USERNAME", "admin")
 ADMIN_PASS = os.getenv("ADMIN_PASSWORD", "changeme")
 
@@ -70,6 +69,7 @@ def require_basic(request: Request):
         )
 
     import base64, os
+import datetime as dt
     try:
         userpass = base64.b64decode(auth.split(" ", 1)[1]).decode("utf-8")
         username, password = userpass.split(":", 1)
@@ -102,10 +102,10 @@ def health():
 def _parse_time(s):
     if not s: return None
     try:
-        return datetime.fromisoformat(s)
+        return dt.dt.dt.datetime.fromisoformat(s)
     except Exception:
         try:
-            return datetime.fromisoformat(s + 'T00:00:00')
+            return dt.dt.dt.datetime.fromisoformat(s + 'T00:00:00')
         except Exception:
             return None
 
@@ -125,9 +125,7 @@ def counts(type: str,
     return {'type': type, 'series': [{'minute': r[0], 'count': int(r[1])} for r in rows]}
 
 @app.get('/dashboard', response_class=HTMLResponse)
-def dashboard(
-    request: Request,
-    group: str = 'day',
+def dashboard(request: Request, group: str = 'min',
     season: str = '',
     camera: str = '',
     date_from: Optional[str] = Query(None, alias='from'),
@@ -218,7 +216,9 @@ def dashboard(
     top_media = [{'label': k, 'count': v} for k, v in top_media_pairs]
 
     return templates.TemplateResponse('dashboard.html', {
-        'request': request,
+        'recommended_baseline': _recommended_baseline(s),
+        'baseline_trend': {'labels': _baseline_trend(s, tz)[0], 'values': _baseline_trend(s, tz)[1]},
+'request': request,
         'title': 'Dashboard',
         'charts': {'vehicle': veh, 'device_seen': dev},
         'totals': {'vehicle': veh['total'], 'device_seen': dev['total']},
@@ -230,42 +230,10 @@ def dashboard(
         'top_media': top_media,
         'alerts': alerts,
         'params': {'from': date_from or '', 'to': date_to or '', 'group': group, 'season': season, 'camera': camera, 'corr': corr}
-    })
+    
+})
 
-@app.post('/settings')
-def settings_save(request: Request,
-                  BALDRICK_CSV_URL: str = Form(''),
-                  BALDRICK_POLL_CRON: str = Form('*/5 * * * *'),
-                  RTSP_URL: str = Form(''),
-                  FPS_TARGET: str = Form('6'),
-                  MIN_CONTOUR_AREA: str = Form('1200'),
-                  TIMEZONE: str = Form('America/Chicago'),
-                  roi_polygon: str = Form('[]'),
-                  tripline: str = Form('[]'),
-                  auth: bool = Depends(require_basic)):
-    # Write .env
-    lines = []
-    def set_line(k,v): lines.append(f"{k}={v}")
-    set_line('BALDRICK_CSV_URL', BALDRICK_CSV_URL)
-    set_line('BALDRICK_POLL_CRON', BALDRICK_POLL_CRON)
-    set_line('RTSP_URL', RTSP_URL)
-    set_line('FPS_TARGET', FPS_TARGET)
-    set_line('MIN_CONTOUR_AREA', MIN_CONTOUR_AREA)
-    set_line('TIMEZONE', TIMEZONE)
-    with open('.env','w') as f:
-        f.write("\n".join(lines)+"\n")
-    # Write config.yaml
-    try:
-        import yaml
-        rp = json.loads(roi_polygon) if roi_polygon else []
-        tl = json.loads(tripline) if tripline else []
-        data = {'roi_polygon': rp, 'tripline': tl,
-                'min_contour_area': int(MIN_CONTOUR_AREA), 'fps_target': int(FPS_TARGET)}
-        with open('config.yaml','w') as f:
-            yaml.safe_dump(data, f)
-    except Exception as e:
-        return JSONResponse({'error': str(e)}, status_code=400)
-    return RedirectResponse('/settings', status_code=303)
+
 
 @app.post('/ingest/autocount')
 async def ingest_autocount(payload: dict):
@@ -441,9 +409,90 @@ def correlate(group: str = 'media', season: str = '', date_from: Optional[str] =
     ranked = sorted(([k,v] for k,v in res.items()), key=lambda x: x[1], reverse=True)
     return {'group': group, 'season': season, 'series': [{'label': k, 'count': v} for k,v in ranked]}
 
+# ---- Admin Settings (safe, separate page) ----
 from app.util_env import set_env_vars
+import pytz, re
 
-import re, pytz, os
+@app.get('/admin/settings', response_class=HTMLResponse)
+def admin_settings_get(request: Request, auth: bool = Depends(require_basic)):
+    vals = {
+        'timezone': os.getenv('TIMEZONE','America/Chicago'),
+        'auto_refresh': os.getenv('DASHBOARD_AUTOREFRESH','60'),
+        'baseline_mode': os.getenv('BALDRICK_BASELINE_MODE','manual'),
+        'baseline': os.getenv('BALDRICK_BASELINE','0'),
+        'baldrick_url': os.getenv('BALDRICK_CSV_URL',''),
+        'admin_username': os.getenv('ADMIN_USERNAME','admin'),
+    }
+    tzs = pytz.common_timezones
+    return templates.TemplateResponse('admin_settings.html', {
+        'request': request, 'saved': False, 'values': vals, 'timezones': tzs
+    })
+
+@app.post('/admin/settings', response_class=HTMLResponse)
+def admin_settings_post(
+    request: Request,
+    timezone: str = Form(...),
+    auto_refresh: int = Form(60),
+    baseline_mode: str = Form('manual'),
+    baseline: int = Form(0),
+    baldrick_url: str = Form(''),
+    admin_username: str = Form('admin'),
+    admin_password: str = Form(''),
+    auth: bool = Depends(require_basic)
+):
+    # Validate timezone
+    if timezone not in pytz.common_timezones:
+        timezone = 'America/Chicago'
+    # Validate mode
+    if baseline_mode not in ('manual','auto'):
+        baseline_mode = 'manual'
+    # Sanitize/validate username
+    admin_username = admin_username.strip() or 'admin'
+    if not re.match(r'^[A-Za-z0-9_.-]{3,64}$', admin_username):
+        admin_username = 'admin'
+    # Password optional (only set if provided)
+    updates = {
+        'TIMEZONE': timezone,
+        'DASHBOARD_AUTOREFRESH': max(int(auto_refresh), 0),
+        'BALDRICK_BASELINE_MODE': baseline_mode,
+        'BALDRICK_BASELINE': max(int(baseline), 0),
+        'BALDRICK_CSV_URL': baldrick_url.strip(),
+        'ADMIN_USERNAME': admin_username,
+    }
+    if admin_password.strip():
+        updates['ADMIN_PASSWORD'] = admin_password.strip()
+
+    set_env_vars(updates)
+
+    # Re-read values to display
+    vals = {
+        'timezone': updates['TIMEZONE'],
+        'auto_refresh': str(updates['DASHBOARD_AUTOREFRESH']),
+        'baseline_mode': updates['BALDRICK_BASELINE_MODE'],
+        'baseline': str(updates['BALDRICK_BASELINE']),
+        'baldrick_url': updates['BALDRICK_CSV_URL'],
+        'admin_username': updates['ADMIN_USERNAME'],
+    }
+    tzs = pytz.common_timezones
+    return templates.TemplateResponse('admin_settings.html', {
+        'request': request, 'saved': True, 'values': vals, 'timezones': tzs
+    })
+
+# ---- Unified Settings Page (protected) ----
+from app.util_env import set_env_vars
+import pytz, re
+
+
+
+@app.get('/admin/settings', response_class=HTMLResponse)
+def redirect_admin_settings():
+    return RedirectResponse('/settings')
+
+from app.util_env import set_env_vars
+import pytz, re, os
+
+from app.util_env import set_env_vars
+import pytz, re, os
 
 @app.get('/settings', response_class=HTMLResponse)
 def settings_get(request: Request, auth: bool = Depends(require_basic)):
@@ -464,20 +513,20 @@ def settings_get(request: Request, auth: bool = Depends(require_basic)):
 def settings_post(
     request: Request,
     timezone: str = Form(...),
+    submit_action: str = Form('save'),
     auto_refresh: int = Form(60),
     baseline_mode: str = Form('manual'),
     baseline: int = Form(0),
     baldrick_url: str = Form(''),
     admin_username: str = Form('admin'),
     admin_password: str = Form(''),
-    submit_action: str = Form('save'),
     auth: bool = Depends(require_basic)
 ):
     if timezone not in pytz.common_timezones:
         timezone = 'America/Chicago'
     if baseline_mode not in ('manual','auto'):
         baseline_mode = 'manual'
-    admin_username = (admin_username or 'admin').strip()
+    admin_username = admin_username.strip() or 'admin'
     if not re.match(r'^[A-Za-z0-9_.-]{3,64}$', admin_username):
         admin_username = 'admin'
 
@@ -486,34 +535,112 @@ def settings_post(
         'DASHBOARD_AUTOREFRESH': max(int(auto_refresh), 0),
         'BALDRICK_BASELINE_MODE': baseline_mode,
         'BALDRICK_BASELINE': max(int(baseline), 0),
-        'BALDRICK_CSV_URL': (baldrick_url or '').strip(),
+        'BALDRICK_CSV_URL': baldrick_url.strip(),
         'ADMIN_USERNAME': admin_username,
     }
-    if (admin_password or '').strip():
+    if admin_password.strip():
         updates['ADMIN_PASSWORD'] = admin_password.strip()
 
     set_env_vars(updates)
 
-    # If Save & Restart was pressed, defer restart so UI can show success
+    # If the user clicked Save & Restart, defer restart then redirect
     if submit_action == 'save_restart':
-        import subprocess, shlex
-        cmd = "sh -lc 'sleep 1; (sudo /usr/bin/systemctl restart glowsync-api || sudo /bin/systemctl restart glowsync-api); (sudo /usr/bin/systemctl restart glowsync-scheduler || sudo /bin/systemctl restart glowsync-scheduler)'"
-        try:
-            subprocess.Popen(cmd, shell=True)
-            return RedirectResponse(url="/settings?restarted=0", status_code=303)
-        except Exception:
-            return RedirectResponse(url="/settings?restarted=1", status_code=303)
+        ok = _defer_restart()
+        return RedirectResponse(url=f"/settings?restarted={'0' if ok else '1'}", status_code=303)
 
     vals = {
-        'timezone': timezone,
+        'timezone': updates['TIMEZONE'],
         'auto_refresh': str(updates['DASHBOARD_AUTOREFRESH']),
-        'baseline_mode': baseline_mode,
+        'baseline_mode': updates['BALDRICK_BASELINE_MODE'],
         'baseline': str(updates['BALDRICK_BASELINE']),
         'baldrick_url': updates['BALDRICK_CSV_URL'],
-        'admin_username': admin_username,
+        'admin_username': updates['ADMIN_USERNAME'],
     }
     tzs = pytz.common_timezones
     return templates.TemplateResponse('settings.html', {
         'request': request, 'saved': True, 'values': vals, 'timezones': tzs
     })
 
+from fastapi.responses import RedirectResponse
+@app.get('/admin/settings', response_class=HTMLResponse)
+def redirect_admin_settings():
+    return RedirectResponse('/settings')
+
+from fastapi.responses import RedirectResponse
+import subprocess, shlex
+
+@app.post('/restart', response_class=HTMLResponse)
+def restart_services(request: Request, auth: bool = Depends(require_basic)):
+    cmds = [
+        "sudo /usr/bin/systemctl restart glowsync-api",
+        "sudo /usr/bin/systemctl restart glowsync-scheduler",
+    ]
+    rc = 0
+    for c in cmds:
+        try:
+            r = subprocess.run(shlex.split(c), capture_output=True, text=True, timeout=15)
+            if r.returncode != 0:
+                rc = r.returncode
+        except Exception:
+            rc = 1
+    # Redirect back to settings with a flag
+    return RedirectResponse(url="/settings?restarted={}".format(0 if rc==0 else rc), status_code=303)
+
+
+
+def _defer_restart():
+    cmd = "sh -lc 'sleep 1; (sudo /usr/bin/systemctl restart glowsync-api || sudo /bin/systemctl restart glowsync-api); (sudo /usr/bin/systemctl restart glowsync-scheduler || sudo /bin/systemctl restart glowsync-scheduler)'"
+    try:
+        subprocess.Popen(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, preexec_fn=os.setsid)
+        return True
+    except Exception:
+        return False
+
+
+
+def _recommended_baseline(sess):
+    # 10th percentile of device_seen last 7 days
+    now = dt.datetime.now(dt.dt.dt.timezone.utc)
+    start = now - timedelta(days=7)
+    vals = sess.execute(
+        select(AutoCount.count_value)
+        .where(AutoCount.count_type=='device_seen',
+               AutoCount.source=='baldrick',
+               AutoCount.timestamp>=start)
+        .order_by(AutoCount.count_value.asc())
+    ).scalars().all()
+    if not vals:
+        return 0
+    idx = max(0, int(len(vals)*0.10)-1)
+    try:
+        return int(vals[idx])
+    except Exception:
+        return 0
+
+def _baseline_trend(sess, tz, days=14):
+    # daily 10th percentile, last `days`, returned as (labels, values)
+    start = dt.datetime.now(dt.dt.dt.timezone.utc) - timedelta(days=days)
+    rows = sess.execute(
+        select(AutoCount.timestamp, AutoCount.count_value)
+        .where(AutoCount.count_type=='device_seen',
+               AutoCount.source=='baldrick',
+               AutoCount.timestamp>=start)
+        .order_by(AutoCount.timestamp.asc())
+    ).all()
+    if not rows:
+        return [], []
+    from collections import defaultdict
+    buckets = defaultdict(list)  # date -> list(values)
+    for ts, v in rows:
+        d = ts.astimezone(tz).strftime('%Y-%m-%d')
+        buckets[d].append(int(v))
+    labels = sorted(buckets.keys())
+    vals = []
+    for d in labels:
+        arr = sorted(buckets[d])
+        if not arr:
+            vals.append(0)
+        else:
+            idx = max(0, int(len(arr)*0.10)-1)
+            vals.append(int(arr[idx]))
+    return labels, vals

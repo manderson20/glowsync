@@ -182,3 +182,103 @@ fetch(`/correlate?group={{ params.get('corr','media') }}&season={{ params.get('s
 
 </script>
 {% endblock %}
+
+<button id="resetZoom" class="btn">Reset Zoom</button>
+<script>
+  // enable zoom/pan on the two charts if they exist
+  for (const id of ['chart-vehicle','chart-device_seen']) {
+    const c = window._charts && window._charts[id];
+    if (c) {
+      c.options.plugins = c.options.plugins || {};
+      c.options.plugins.zoom = {
+        zoom: { wheel: { enabled: true }, pinch: { enabled: true }, mode: 'x' },
+        pan:  { enabled: true, mode: 'x' }
+      };
+      c.update();
+    }
+  }
+  document.getElementById('resetZoom')?.addEventListener('click', () => {
+    for (const id of ['chart-vehicle','chart-device_seen']) {
+      const c = window._charts && window._charts[id];
+      if (c && c.resetZoom) c.resetZoom();
+    }
+  });
+</script>
+<form method="get" action="/dashboard" style="margin:8px 0">
+  <label>Group:</label>
+  <select name="group">
+    <option value="min">Minute</option>
+    <option value="hour" selected>Hour</option>
+    <option value="day">Day</option>
+  </select>
+  <button type="submit">Apply</button>
+</form>
+<!-- GS_DASH_AUTOREFRESH -->
+<script>
+  (function(){
+    // 60s auto-refresh; set to 0 to disable
+    var REFRESH_SECONDS = 60;
+    if (!REFRESH_SECONDS) return;
+
+    let paused = false;
+    // If you zoom/pan the chart, pause refresh briefly so it doesn't interrupt
+    document.addEventListener('wheel', () => { paused = true; setTimeout(()=>paused=false, 2000); }, {passive:true});
+    document.addEventListener('pointerdown', () => { paused = true; setTimeout(()=>paused=false, 2000); }, {passive:true});
+
+    setInterval(function(){
+      if (!paused) { window.location.reload(); }
+    }, REFRESH_SECONDS * 1000);
+  })();
+</script>
+
+
+<!-- GS: overlay raw vs adjusted + baseline line + small trend -->
+<script>
+(function(){
+  try {
+    const data = {{ charts|tojson }};
+    const rec = {{ recommended_baseline|default(0) }};
+    const trend = {{ baseline_trend|tojson|default({'labels':[],'values':[]}) }};
+
+    // 1) Overlay on the existing device_seen chart if present
+    var chart = (window._charts && window._charts['chart-device_seen']) ? window._charts['chart-device_seen'] : null;
+    if (chart && data && data.device_seen) {
+      const labels = data.device_seen.labels || [];
+      const raw = data.device_seen.raw_values || data.device_seen.values || [];
+      const adj = data.device_seen.adj_values || data.device_seen.values || [];
+      const baselineConst = data.device_seen.baseline_const || 0;
+
+      // Replace datasets with Raw + Adjusted + Baseline line
+      chart.data.labels = labels;
+      chart.data.datasets = [
+        { label: 'Adjusted (raw - baseline)', data: adj, borderWidth: 2, tension: 0.2 },
+        { label: 'Raw', data: raw, borderDash: [6,4], borderWidth: 2, tension: 0.2 },
+        { label: 'Baseline', data: labels.map(()=>baselineConst), borderDash: [2,2], pointRadius: 0, borderWidth: 1, tension: 0 }
+      ];
+      chart.update();
+    }
+
+    // 2) Add a small Baseline Trend chart under the device chart if not present
+    if (!document.getElementById('baseline-trend')) {
+      const wrap = document.querySelector('#chart-device_seen')?.closest('div') || document.body;
+      const c = document.createElement('canvas');
+      c.id = 'baseline-trend';
+      c.style.marginTop = '8px';
+      wrap.appendChild(c);
+
+      if (window.Chart && trend && trend.labels && trend.labels.length) {
+        new Chart(c.getContext('2d'), {
+          type: 'line',
+          data: { labels: trend.labels, datasets: [{ label: 'Baseline Trend (daily 10th pct)', data: trend.values, borderWidth: 2, pointRadius: 0, tension: 0.2 }] },
+          options: { responsive: true, scales: { x: { display: true }, y: { beginAtZero: true } } }
+        });
+      } else {
+        c.outerHTML = '<div id="baseline-trend" style="opacity:.6;font-size:12px;margin-top:6px;">No baseline history yet</div>';
+      }
+    }
+
+    // 3) If you expose recommended baseline somewhere, you can show it like:
+    //   document.querySelector('#rec-base')?.innerText = rec;
+  } catch(e) { console.warn('GS overlay script:', e); }
+})();
+</script>

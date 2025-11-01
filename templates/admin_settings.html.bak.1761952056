@@ -1,0 +1,82 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>GlowSync – Admin Settings</title>
+  <style>
+    body{font-family:system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; margin:24px;}
+    .wrap{max-width:880px;margin:auto}
+    h1{margin:0 0 12px}
+    form{background:#1112; padding:16px; border-radius:8px}
+    label{display:block; margin:12px 0 6px}
+    input, select{width:100%; padding:8px; border-radius:6px; border:1px solid #ccc}
+    .row{display:grid; grid-template-columns:1fr 1fr; gap:16px}
+    .btn{margin-top:16px; padding:10px 16px; border:0; border-radius:6px; background:#0b5; color:#fff; cursor:pointer}
+    .note{margin-top:12px; font-size:0.95em; color:#555}
+    .ok{background:#e8fff0; border-left:4px solid #0b5; padding:10px 12px; margin:16px 0; border-radius:6px}
+    .warn{background:#fff6e5; border-left:4px solid #f90; padding:10px 12px; margin:16px 0; border-radius:6px}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Admin Settings</h1>
+
+  {% if saved %}
+    <div class="ok">Saved. You may be prompted to log in again if you changed credentials.</div>
+    <div class="warn">To apply TIMEZONE / auto-refresh / baseline to all services, run:<br>
+      <code>sudo systemctl restart glowsync-api glowsync-scheduler</code>
+    </div>
+  {% endif %}
+
+  <form method="post" action="/admin/settings">
+    <h3>General</h3>
+    <label for="timezone">Time Zone</label>
+    <select id="timezone" name="timezone">
+      {% for tz in timezones %}
+        <option value="{{ tz }}" {% if tz == values.timezone %}selected{% endif %}>{{ tz }}</option>
+      {% endfor %}
+    </select>
+
+    <div class="row">
+      <div>
+        <label for="autorf">Dashboard Auto-refresh (seconds, 0=off)</label>
+        <input id="autorf" type="number" min="0" name="auto_refresh" value="{{ values.auto_refresh or 60 }}">
+      </div>
+      <div>
+        <label for="baseline">Baldrick Manual Baseline (devices)</label>
+        <input id="baseline" type="number" min="0" name="baseline" value="{{ values.baseline or 0 }}">
+      </div>
+    </div>
+
+    <div class="row">
+      <div>
+        <label for="mode">Baldrick Baseline Mode</label>
+        <select id="mode" name="baseline_mode">
+          <option value="manual" {% if values.baseline_mode=='manual' %}selected{% endif %}>Manual</option>
+          <option value="auto" {% if values.baseline_mode=='auto' %}selected{% endif %}>Auto (10th percentile)</option>
+        </select>
+      </div>
+      <div>
+        <label for="csvurl">Baldrick CSV URL</label>
+        <input id="csvurl" type="text" name="baldrick_url" placeholder="http://IP/csv" value="{{ values.baldrick_url or '' }}">
+      </div>
+    </div>
+
+    <h3>Admin Login</h3>
+    <div class="row">
+      <div>
+        <label for="user">Username</label>
+        <input id="user" type="text" name="admin_username" value="{{ values.admin_username or 'admin' }}">
+      </div>
+      <div>
+        <label for="pass">New Password (leave blank to keep)</label>
+        <input id="pass" type="password" name="admin_password" value="">
+      </div>
+    </div>
+
+    <button class="btn" type="submit">Save Settings</button>
+    <p class="note">Changes write to <code>.env</code>. Credentials apply on next request; others after service restart.</p>
+  </form>
+</div>
+</body>
+</html>
