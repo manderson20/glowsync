@@ -502,22 +502,12 @@ from fastapi import Request, Depends
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
-# --- window helper shim (define _last_window_utc and alias _gs_last_window_utc) ---
+# legacy alias so code referencing _gs_last_window_utc still works
 try:
-# _last_window_utc   # stray identifier removed
-except NameError:
-    def _last_window_utc(tzname: str, minutes: int | None):
-        mins = minutes or 60
-        now_utc = dt.datetime.now(dt.timezone.utc)
-        start_utc = now_utc - dt.timedelta(minutes=mins)
-        tz = pytz.timezone(tzname or 'America/Chicago')
-        return start_utc, now_utc, tz
-try:
-# _gs_last_window_utc  # stray identifier removed
+    _gs_last_window_utc
 except NameError:
     _gs_last_window_utc = _last_window_utc
-# --- end window helper shim ---
-# (removed old alias block; replaced by robust shim above)
+
 # _gs_last_window_utc  # stray identifier removed
 # orphan alias repaired by proper shim below
 if 'templates' not in globals():

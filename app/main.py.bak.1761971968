@@ -502,33 +502,15 @@ from fastapi import Request, Depends
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
-# --- window helper shim (define _last_window_utc and alias _gs_last_window_utc) ---
-try:
-# _last_window_utc   # stray identifier removed
-except NameError:
-    def _last_window_utc(tzname: str, minutes: int | None):
-        mins = minutes or 60
-        now_utc = dt.datetime.now(dt.timezone.utc)
-        start_utc = now_utc - dt.timedelta(minutes=mins)
-        tz = pytz.timezone(tzname or 'America/Chicago')
-        return start_utc, now_utc, tz
-try:
-# _gs_last_window_utc  # stray identifier removed
-except NameError:
-    _gs_last_window_utc = _last_window_utc
-# --- end window helper shim ---
-# (removed old alias block; replaced by robust shim above)
-# _gs_last_window_utc  # stray identifier removed
-# orphan alias repaired by proper shim below
 if 'templates' not in globals():
     templates = Jinja2Templates(directory="templates")
 
 def _gs_db_path() -> str:
     return os.path.expanduser("~/glowsync/data/tracker.db")
 
-# df_utc, to_utc, _ = _last_window_utc(tzname, (minutes if 'minutes' in locals() else 60))
-# df_iso = df_utc.isoformat()
-# to_iso = to_utc.isoformat()
+df_utc, to_utc, _ = _gs_last_window_utc(tzname, minutes)
+df_iso = df_utc.isoformat()
+to_iso = to_utc.isoformat()
 #     tz = pytz.timezone(tzname or 'America/Chicago')
 #     now_local = dt.datetime.now(tz)
 #     start_local = now_local - dt.timedelta(minutes=minutes)
@@ -561,7 +543,7 @@ def dashboard(request: Request, auth: bool = Depends(require_basic)):
             except Exception:
                 pass
     # --- end ensure minutes ---
-    df_utc, to_utc, _ = _last_window_utc(tzname, minutes)
+    df_utc, to_utc, _ = _gs_last_window_utc(tzname, minutes)
     df_iso = df_utc.isoformat()
     to_iso = to_utc.isoformat()
     # Query DB

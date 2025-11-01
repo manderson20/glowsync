@@ -9,17 +9,6 @@
 
 <div style="display:flex;justify-content:space-between;align-items:center;gap:1rem;margin-bottom:0.75rem;">
   <div><em>Times shown in {{ _params.get('tzname','America/Chicago') }}</em></div>
-<div style="display:flex;flex-wrap:wrap;gap:.5rem;margin:.5rem 0 1rem 0;">
-  <strong style="margin-right:.25rem;">Zoom:</strong>
-  {% set _win = _params.get("win","1h") %}
-  {% for opt in ["1h","2h","3h","4h","6h","10h","12h","24h","48h","7d","30d"] %}
-    {% set href = "/dashboard?win=" ~ opt %}
-    <a href="{{ href }}" style="padding:.25rem .5rem;border:1px solid #ddd;border-radius:.33rem;text-decoration:none;font-size:.9rem;{% if _win==opt %}background:#eee;font-weight:600;{% endif %}">
-      {{ opt }}
-    </a>
-  {% endfor %}
-</div>
-
   <form method="post" action="/admin/sync-baldrick" style="margin:0;">
     <button type="submit">Sync Now</button>
   </form>

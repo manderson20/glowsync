@@ -502,37 +502,18 @@ from fastapi import Request, Depends
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
-# --- window helper shim (define _last_window_utc and alias _gs_last_window_utc) ---
-try:
-# _last_window_utc   # stray identifier removed
-except NameError:
-    def _last_window_utc(tzname: str, minutes: int | None):
-        mins = minutes or 60
-        now_utc = dt.datetime.now(dt.timezone.utc)
-        start_utc = now_utc - dt.timedelta(minutes=mins)
-        tz = pytz.timezone(tzname or 'America/Chicago')
-        return start_utc, now_utc, tz
-try:
-# _gs_last_window_utc  # stray identifier removed
-except NameError:
-    _gs_last_window_utc = _last_window_utc
-# --- end window helper shim ---
-# (removed old alias block; replaced by robust shim above)
-# _gs_last_window_utc  # stray identifier removed
-# orphan alias repaired by proper shim below
 if 'templates' not in globals():
     templates = Jinja2Templates(directory="templates")
 
 def _gs_db_path() -> str:
     return os.path.expanduser("~/glowsync/data/tracker.db")
 
-# df_utc, to_utc, _ = _last_window_utc(tzname, (minutes if 'minutes' in locals() else 60))
-# df_iso = df_utc.isoformat()
-# to_iso = to_utc.isoformat()
-#     tz = pytz.timezone(tzname or 'America/Chicago')
-#     now_local = dt.datetime.now(tz)
-#     start_local = now_local - dt.timedelta(minutes=minutes)
-#     return start_local.astimezone(dt.timezone.utc), now_local.astimezone(dt.timezone.utc), tz
+def _gs_last_window_utc(tzname: str, minutes: int = None):
+    minutes = int(os.getenv('DEFAULT_WINDOW_MIN','60') or 60) if minutes is None else minutes
+    tz = pytz.timezone(tzname or 'America/Chicago')
+    now_local = dt.datetime.now(tz)
+    start_local = now_local - dt.timedelta(minutes=minutes)
+    return start_local.astimezone(dt.timezone.utc), now_local.astimezone(dt.timezone.utc), tz
 
 @app.get('/dashboard', response_class=HTMLResponse)
 def dashboard(request: Request, auth: bool = Depends(require_basic)):
@@ -542,28 +523,9 @@ def dashboard(request: Request, auth: bool = Depends(require_basic)):
     baseline_manual = int(os.getenv('BALDRICK_BASELINE','0') or 0)
 
     # Time window (last N minutes, default 60)
-    
-    # --- ensure minutes (zoom window) exists ---
-    minutes = 60
-    try:
-        win = request.query_params.get('win') if hasattr(request, 'query_params') else None
-    except Exception:
-        win = None
-    if win:
-        _map = {'1h':60,'2h':120,'3h':180,'4h':240,'6h':360,'10h':600,'12h':720,
-                '24h':1440,'48h':2880,'7d':10080,'30d':43200,'week':10080,'month':43200}
-        w = str(win).strip().lower()
-        if w in _map:
-            minutes = _map[w]
-        else:
-            try:
-                minutes = max(int(w), 1)
-            except Exception:
-                pass
-    # --- end ensure minutes ---
-    df_utc, to_utc, _ = _last_window_utc(tzname, minutes)
-    df_iso = df_utc.isoformat()
-    to_iso = to_utc.isoformat()
+    df_utc, to_utc, _ = _gs_last_window_utc(tzname, minutes)
+    df_iso, to_iso = df_utc.isoformat(), to_utc.isoformat()
+
     # Query DB
     dbp = _gs_db_path()
     con = sqlite3.connect(dbp)
@@ -612,22 +574,24 @@ def dashboard(request: Request, auth: bool = Depends(require_basic)):
 
     # Build series (Adjusted never below 0)
     labels, raw, adj = [], [], []
-    for ts, v in rows:
-        r = int(v)
-        a = r - baseline
-        if a < 0: a = 0
-        # Convert UTC ISO -> local tz string (single line, readable)
-        try:
-            dt_utc = dt.datetime.fromisoformat(ts)
-            if dt_utc.tzinfo is None:
-                dt_utc = dt_utc.replace(tzinfo=dt.timezone.utc)
-            dt_local = dt_utc.astimezone(tz)
-            label = dt_local.strftime('%b %d · %I:%M %p').replace(' 0', ' ')
-        except Exception:
-            label = ts
-        labels.append(label)
-        raw.append(r)
-        adj.append(a)
+for ts, v in rows:
+    r = int(v)
+    a = r - baseline
+    if a < 0: a = 0
+    # Convert UTC ISO -> local tz string (two-line label: date on top, time below)
+    try:
+        dt_utc = dt.datetime.fromisoformat(ts)
+        if dt_utc.tzinfo is None:
+            dt_utc = dt_utc.replace(tzinfo=dt.timezone.utc)
+        dt_local = dt_utc.astimezone(tz)
+        label = dt_local.strftime('%b %d') + '
+' + dt_local.strftime('%I:%M %p').lstrip('0')
+    except Exception:
+        label = ts
+    labels.append(label)
+    raw.append(r)
+    adj.append(a)
+
     peak_label = labels[adj.index(max(adj))] if adj else '—'
     peak_count = max(adj) if adj else 0
 
