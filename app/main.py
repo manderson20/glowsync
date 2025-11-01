@@ -1,3 +1,4 @@
+import datetime as dt
 from fastapi.responses import HTMLResponse, RedirectResponse
 import pytz
 import logging
@@ -130,7 +131,7 @@ def counts(type: str,
 @app.get('/dashboard', response_class=HTMLResponse)
 def dashboard(
     request: Request,
-    group: str = 'day',
+    group: str = 'min',
     season: str = '',
     camera: str = '',
     date_from: Optional[str] = Query(None, alias='from'),
@@ -350,7 +351,7 @@ def purge(before: str = Form(''), season_name: str = Form(''), auth: bool = Depe
     return RedirectResponse('/storage', status_code=303)
 
 @app.get('/export.xlsx')
-def export_xlsx(season: str, group: str = 'day', auth: bool = Depends(require_basic)):
+def export_xlsx(season: str, group: str = 'min', auth: bool = Depends(require_basic)):
     s = get_session()
     buf = BytesIO()
     wb = xlsxwriter.Workbook(buf, {'in_memory': True})
@@ -377,7 +378,7 @@ def export_xlsx(season: str, group: str = 'day', auth: bool = Depends(require_ba
                     headers={'Content-Disposition': f'attachment; filename="{season.replace(" ","_")}_export.xlsx"'})
 
 @app.get('/correlate')
-def correlate(group: str = 'media', season: str = '', date_from: Optional[str] = None, date_to: Optional[str] = None):
+def correlate(group: str = 'min', season: str = '', date_from: Optional[str] = None, date_to: Optional[str] = None):
     # For each AutoCount bucket (vehicles), attach last-known FPPStatus at/before that timestamp, then group/sum.
     df = _parse_time(date_from)
     dt = _parse_time(date_to)
@@ -485,4 +486,12 @@ def settings_post(
         return RedirectResponse(url="/settings?restarted=0", status_code=303)
     except Exception:
         return RedirectResponse(url="/settings?restarted=1", status_code=303)
+
+
+
+def _default_window_minutes():
+    try:
+        return max(1, int(os.getenv('DEFAULT_WINDOW_MIN', '60')))
+    except Exception:
+        return 60
 
