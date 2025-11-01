@@ -14,7 +14,6 @@ from app.config import load_config
 from app.db import init_db, get_session, AutoCount, Controller, Season, Alert
 from sqlalchemy import select, func
 import os, json
-group = 'min'
 
 # Basic auth for settings
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
@@ -129,8 +128,8 @@ def counts(type: str,
     rows = s.execute(q).all()
     return {'type': type, 'series': [{'minute': r[0], 'count': int(r[1])} for r in rows]}
 
-@app.get('/dashboard_old', response_class=HTMLResponse)
-def dashboard_old(
+@app.get('/dashboard', response_class=HTMLResponse)
+def dashboard(
     request: Request,
     season: str = '',
     camera: str = '',
@@ -494,109 +493,3 @@ def _default_window_minutes():
         return max(1, int(os.getenv('DEFAULT_WINDOW_MIN', '60')))
     except Exception:
         return 60
-
-# --- GlowSync: clean /dashboard handler (last 60 minutes, per-minute) ---
-import os, sqlite3, datetime as dt, pytz
-from fastapi import Request, Depends
-from fastapi.responses import HTMLResponse
-from fastapi.templating import Jinja2Templates
-
-if 'templates' not in globals():
-    templates = Jinja2Templates(directory="templates")
-
-def _gs_db_path() -> str:
-    return os.path.expanduser("~/glowsync/data/tracker.db")
-
-def _gs_last_window_utc(tzname: str, minutes: int = None):
-    minutes = int(os.getenv('DEFAULT_WINDOW_MIN','60') or 60) if minutes is None else minutes
-    tz = pytz.timezone(tzname or 'America/Chicago')
-    now_local = dt.datetime.now(tz)
-    start_local = now_local - dt.timedelta(minutes=minutes)
-    return start_local.astimezone(dt.timezone.utc), now_local.astimezone(dt.timezone.utc), tz
-
-@app.get('/dashboard', response_class=HTMLResponse)
-def dashboard(request: Request, auth: bool = Depends(require_basic)):
-    # Settings
-    tzname = os.getenv('TIMEZONE','America/Chicago')
-    baseline_mode = (os.getenv('BALDRICK_BASELINE_MODE','manual') or 'manual').lower()
-    baseline_manual = int(os.getenv('BALDRICK_BASELINE','0') or 0)
-
-    # Time window (last N minutes, default 60)
-    df_utc, to_utc, _ = _gs_last_window_utc(tzname)
-    df_iso, to_iso = df_utc.isoformat(), to_utc.isoformat()
-
-    # Query DB
-    dbp = _gs_db_path()
-    con = sqlite3.connect(dbp)
-    cur = con.cursor()
-    # Ensure table exists (idempotent)
-    cur.execute("""
-      CREATE TABLE IF NOT EXISTS AutoCount (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        count_type   TEXT NOT NULL,
-        source       TEXT NOT NULL,
-        timestamp    TEXT NOT NULL,
-        count_value  INTEGER NOT NULL,
-        camera_name  TEXT,
-        season       TEXT
-      )
-    """)
-
-    # Auto baseline if requested: 10th percentile of last 7 days
-    baseline = baseline_manual
-    if baseline_mode == 'auto':
-        start7 = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=7)).isoformat()
-        cur.execute("""
-          SELECT count_value FROM AutoCount
-          WHERE count_type='device_seen'
-            AND source='baldrick'
-            AND timestamp >= ?
-          ORDER BY count_value ASC
-        """, (start7,))
-        vals = [r[0] for r in cur.fetchall()]
-        if vals:
-            idx = max(0, int(len(vals)*0.10)-1)
-            baseline = int(vals[idx])
-
-    # Pull last-window baldrick rows
-    cur.execute("""
-      SELECT timestamp, count_value
-      FROM AutoCount
-      WHERE count_type='device_seen'
-        AND source='baldrick'
-        AND timestamp >= ?
-        AND timestamp <  ?
-      ORDER BY timestamp ASC
-    """, (df_iso, to_iso))
-    rows = cur.fetchall()
-    con.close()
-
-    # Build series (Adjusted never below 0)
-    labels, raw, adj = [], [], []
-    for ts, v in rows:
-        r = int(v)
-        a = r - baseline
-        if a < 0: a = 0
-        labels.append(ts)
-        raw.append(r)
-        adj.append(a)
-
-    peak_label = labels[adj.index(max(adj))] if adj else '—'
-    peak_count = max(adj) if adj else 0
-
-    return templates.TemplateResponse('dashboard.html', {
-        'request': request,
-        'title': 'Dashboard',
-        'charts': {
-            'device_seen': {
-                'labels': labels,
-                'raw_values': raw,
-                'values': adj,
-                'baseline_const': baseline
-            }
-        },
-        'totals': {'device_seen': sum(adj)},
-        'peaks': {'device_seen': {'label': peak_label, 'count': peak_count}},
-        'params': {'group': 'min'},
-    })
-# --- end clean /dashboard handler ---

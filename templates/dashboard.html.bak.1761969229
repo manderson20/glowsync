@@ -143,8 +143,8 @@
 </div>
 
 <script>
-const veh = {{ (_charts.get('vehicle', {'labels':[],'values':[],'raw_values':[],'baseline_const':0})) | tojson }};
-const dev = {{ (_charts.get('device_seen', {'labels':[],'values':[],'raw_values':[],'baseline_const':0})) | tojson }};
+const veh = {{ charts.vehicle | tojson }};
+const dev = {{ charts.device_seen | tojson }};
 
 function mkChart(id, data, label){
   const ctx = document.getElementById(id).getContext('2d');

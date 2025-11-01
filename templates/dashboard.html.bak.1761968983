@@ -64,7 +64,7 @@
     <h3 style="margin:0 0 8px 0;">Controllers</h3>
     <div>
       <span style="display:inline-block;padding:4px 10px;border-radius:999px;background:#0b3b1e;color:#d1fae5;border:1px solid #065f46;">
-        Online {{ (_controllers.get('online', 0)) }} / {{ (_controllers.get('total', 0)) }}
+        Online {{ controllers.online|default(0) }} / {{ controllers.total|default(0) }}
       </span>
       <span class="muted" style="margin-left:8px;">Falcon & FPP</span>
     </div>
@@ -143,8 +143,8 @@
 </div>
 
 <script>
-const veh = {{ (_charts.get('vehicle', {'labels':[],'values':[],'raw_values':[],'baseline_const':0})) | tojson }};
-const dev = {{ (_charts.get('device_seen', {'labels':[],'values':[],'raw_values':[],'baseline_const':0})) | tojson }};
+const veh = {{ charts.vehicle | tojson }};
+const dev = {{ charts.device_seen | tojson }};
 
 function mkChart(id, data, label){
   const ctx = document.getElementById(id).getContext('2d');

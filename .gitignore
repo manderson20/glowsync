@@ -21,3 +21,16 @@ node_modules/
 
 # Systemd units generated locally (we won't track /etc files)
 *.service
+# Python/venv
+.venv/
+__pycache__/
+*.pyc
+
+# Local runtime data
+data/
+*.db
+*.sqlite
+
+# Env & logs
+.env
+*.log
