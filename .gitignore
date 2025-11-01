@@ -21,3 +21,6 @@ node_modules/
 
 # Systemd units generated locally (we won't track /etc files)
 *.service
+
+# local runtime data
+data/*.db
