@@ -1,44 +1,88 @@
 {% extends "base.html" %}
 {% block content %}
+{% if request.query_params.get("restarted") == "0" %}
+  <div class="card" style="border:1px solid #065f46; background:#0b3b1e; color:#d1fae5; margin-bottom:12px;">
+    Services restart requested — the page will refresh in 3s…
+  </div>
+  <script>setTimeout(()=>location.href='/settings', 3000);</script>
+{% endif %}
+
 <h2 style="margin:0 0 12px 0;">Settings</h2>
-<form method="post" action="/settings" class="card">
-  <div class="row">
-    <div>
-      <label>Baldrick CSV URL</label>
-      <input name="BALDRICK_CSV_URL" value="{{ env.BALDRICK_CSV_URL or '' }}">
-    </div>
-    <div>
-      <label>Baldrick Poll Cron (crontab)</label>
-      <input name="BALDRICK_POLL_CRON" value="{{ env.BALDRICK_POLL_CRON or '*/5 * * * *' }}">
-    </div>
+
+{% if request.query_params.get("restarted") %}
+  <div class="card" style="border:1px solid #065f46; background:#0b3b1e; color:#d1fae5; margin-bottom:12px;">
+    Services restarted (code {{ request.query_params.get("restarted") }}).
   </div>
-  <div class="row">
-    <div>
-      <label>RTSP URL (G3 Bullet)</label>
-      <input name="RTSP_URL" value="{{ env.RTSP_URL or '' }}">
-    </div>
-    <div>
-      <label>FPS Target</label>
-      <input name="FPS_TARGET" value="{{ env.FPS_TARGET or '6' }}">
-    </div>
+{% endif %}
+
+{% if saved %}
+  <div class="card" style="border:1px solid #065f46; background:#0b3b1e; color:#d1fae5; margin-bottom:12px;">
+    Saved! If you changed credentials, you may need to log in again.
   </div>
-  <div class="row">
-    <div>
-      <label>Min Contour Area</label>
-      <input name="MIN_CONTOUR_AREA" value="{{ env.MIN_CONTOUR_AREA or '1200' }}">
-    </div>
-    <div>
-      <label>Timezone</label>
-      <input name="TIMEZONE" value="{{ env.TIMEZONE or 'America/Chicago' }}">
-    </div>
+  <div class="card" style="border:1px solid #92400e; background:#1f1103; color:#fef3c7; margin-bottom:16px;">
+    To apply TIMEZONE / auto-refresh / baseline everywhere, restart services (button below) or run:
+    <pre style="margin:8px 0 0 0;">sudo systemctl restart glowsync-api glowsync-scheduler</pre>
   </div>
-  <label>ROI Polygon (JSON, list of [x,y])</label>
-  <textarea name="roi_polygon" rows="3">{{ vision.roi_polygon | tojson }}</textarea>
-  <label>Tripline (JSON, two [x,y] points)</label>
-  <textarea name="tripline" rows="2">{{ vision.tripline | tojson }}</textarea>
-  <div style="margin-top:12px;">
-    <button type="submit">Save</button>
+{% endif %}
+
+<form method="post" action="/settings"
+      class="card"
+      style="display:grid; grid-template-columns: repeat(auto-fit, minmax(240px,1fr)); gap:12px; align-items:end; margin-bottom:16px;">
+
+  <div style="grid-column: 1 / -1;">
+    <label>Time Zone</label>
+    <select name="timezone" style="width:100%;">
+      {% for tz in timezones %}
+        <option value="{{ tz }}" {% if tz == values.timezone %}selected{% endif %}>{{ tz }}</option>
+      {% endfor %}
+    </select>
   </div>
-  <p class="muted" style="margin-top:8px;">Changes write to <code>.env</code> and <code>config.yaml</code>. Restart services to apply the tripline/ROI.</p>
+
+  <div>
+    <label>Dashboard Auto-refresh (seconds, 0 = off)</label>
+    <input type="number" min="0" name="auto_refresh" value="{{ values.auto_refresh or 60 }}">
+  </div>
+
+  <div>
+    <label>Baldrick Baseline Mode</label>
+    <select name="baseline_mode">
+      <option value="manual" {% if values.baseline_mode=='manual' %}selected{% endif %}>Manual</option>
+      <option value="auto" {% if values.baseline_mode=='auto' %}selected{% endif %}>Auto (10th percentile)</option>
+    </select>
+  </div>
+
+  <div>
+    <label>Baldrick Manual Baseline (devices)</label>
+    <input type="number" min="0" name="baseline" value="{{ values.baseline or 0 }}">
+  </div>
+
+  <div style="grid-column: 1 / -1;">
+    <label>Baldrick CSV URL</label>
+    <input type="text" name="baldrick_url" placeholder="http://IP/csv" value="{{ values.baldrick_url or '' }}">
+  </div>
+
+  <div>
+    <label>Admin Username</label>
+    <input type="text" name="admin_username" value="{{ values.admin_username or 'admin' }}">
+  </div>
+
+  <div>
+    <label>New Password (leave blank to keep)</label>
+    <input type="password" name="admin_password" value="">
+  </div>
+
+  <div style="display:flex; gap:8px; align-items:center;">
+    <button type="submit">Save Settings</button>
+    
+
+  </div>
+  <div style="display:flex; gap:8px; align-items:center; margin-top:8px;">
+    <button type="submit" name="submit_action" value="save">Save</button>
+    <button type="submit" name="submit_action" value="save_restart"
+            onclick="return confirm('Restart GlowSync services now? This will briefly interrupt the UI.');">
+      Save & Restart
+    </button>
+  </div>
 </form>
+
 {% endblock %}
